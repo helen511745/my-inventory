@@ -3,136 +3,130 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>行動庫存管理系統</title>
+    <title>同步庫存管理系統</title>
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-database-compat.js"></script>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
         :root { --danger: #ff4d4d; --success: #2ecc71; --primary: #3498db; }
         body { font-family: -apple-system, sans-serif; margin: 0; padding: 15px; background: #f4f7f6; }
-        h2 { text-align: center; color: #333; }
-        
-        /* 區塊樣式 */
         .card { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        .btn { padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; color: white; font-weight: bold; }
-        .btn-blue { background: var(--primary); width: 100%; margin-bottom: 10px; }
-        .btn-add { background: var(--success); }
-        .btn-sub { background: var(--danger); }
-        
-        /* 掃描器 */
-        #reader { width: 100%; border-radius: 10px; overflow: hidden; }
-
-        /* 庫存列表 */
+        .btn { padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; color: white; font-weight: bold; width: 100%; margin-top: 5px; }
+        .btn-blue { background: var(--primary); }
+        .btn-add { background: var(--success); width: auto; flex: 1; }
+        .btn-sub { background: var(--danger); width: auto; flex: 1; }
+        input { padding: 10px; margin: 5px 0; width: 100%; box-sizing: border-box; border: 1px solid #ddd; border-radius: 5px; }
         .inventory-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid #eee; }
-        .out-of-stock { background-color: #ffeaea; border-left: 5px solid var(--danger); color: var(--danger); font-weight: bold; }
-        
-        .controls { display: flex; gap: 5px; }
-        input, select { padding: 8px; margin: 5px 0; width: 100%; box-sizing: border-box; }
+        .out-of-stock { background-color: #ffeaea; border-left: 5px solid var(--danger); color: var(--danger); }
         .hidden { display: none; }
     </style>
 </head>
 <body>
 
-    <h2>📦 庫存管理系統</h2>
+    <div id="login-section" class="card">
+        <h2>🔐 庫存同步登入</h2>
+        <p style="font-size: 0.8em; color: gray;">輸入相同的密碼即可在不同手機同步資料</p>
+        <input type="password" id="user-password" placeholder="輸入您的同步密碼">
+        <button class="btn btn-blue" onclick="login()">進入系統</button>
+    </div>
 
-    <div class="card">
-        <button class="btn btn-blue" onclick="startScanner()">📷 掃描條碼</button>
-        <div id="reader"></div>
-        <div id="scan-result" class="hidden">
-            <h3 id="res-name">產品名稱</h3>
-            <p>條碼: <span id="res-barcode"></span></p>
-            <p>目前庫存: <span id="res-qty"></span></p>
-            <div style="display:flex; gap:10px;">
-                <button class="btn btn-add" onclick="updateQty(1)">＋ 增加備貨</button>
-                <button class="btn btn-sub" onclick="updateQty(-1)">－ 減少備貨</button>
+    <div id="main-content" class="hidden">
+        <h2 id="current-user-title">📦 雲端庫存清單</h2>
+        
+        <div class="card">
+            <button class="btn btn-blue" onclick="startScanner()">📷 掃描條碼</button>
+            <div id="reader"></div>
+            <div id="scan-result" class="hidden">
+                <h3 id="res-name">產品名稱</h3>
+                <p>條碼: <span id="res-barcode"></span> | 庫存: <span id="res-qty"></span></p>
+                <div style="display:flex; gap:10px;">
+                    <button class="btn btn-add" onclick="updateQty(1)">＋ 增加</button>
+                    <button class="btn btn-sub" onclick="updateQty(-1)">－ 減少</button>
+                </div>
             </div>
+        </div>
+
+        <div class="card">
+            <h3>➕ 新增/修改品項</h3>
+            <input type="text" id="new-barcode" placeholder="條碼編號">
+            <input type="text" id="new-name" placeholder="產品名稱">
+            <input type="number" id="new-qty" placeholder="初始數量">
+            <button class="btn btn-blue" style="background: #8e44ad;" onclick="addItem()">上傳至雲端</button>
+        </div>
+
+        <div class="card">
+            <h3>📊 庫存總覽</h3>
+            <div id="inventory-list"></div>
         </div>
     </div>
 
-    <div class="card">
-        <h3>➕ 新增/修改品項</h3>
-        <input type="text" id="new-barcode" placeholder="條碼編號">
-        <input type="text" id="new-name" placeholder="產品名稱">
-        <input type="number" id="new-qty" placeholder="初始庫存數量">
-        <button class="btn btn-blue" style="background: #8e44ad;" onclick="addItem()">儲存品項</button>
-    </div>
-
-    <div class="card">
-        <h3>📊 庫存總覽</h3>
-        <div id="inventory-list"></div>
-    </div>
-
     <script>
-        let inventory = JSON.parse(localStorage.getItem('inventory')) || {};
+        // --- 請將下方的配置替換成您在 Firebase 取得的資料 ---
+        const firebaseConfig = {
+            apiKey: "你的API_KEY",
+            authDomain: "你的專案.firebaseapp.com",
+            databaseURL: "https://你的專案-default-rtdb.firebaseio.com",
+            projectId: "你的專案ID",
+            storageBucket: "你的專案.appspot.com",
+            messagingSenderId: "你的ID",
+            appId: "你的APP_ID"
+        };
+        // ----------------------------------------------
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
         let currentBarcode = "";
+        let userPath = "";
 
-        // 初始化列表
-        renderInventory();
-
-        function startScanner() {
-            const html5QrCode = new Html5Qrcode("reader");
-            html5QrCode.start(
-                { facingMode: "environment" }, 
-                { fps: 10, qrbox: { width: 250, height: 150 } },
-                (decodedText) => {
-                    handleScan(decodedText);
-                    html5QrCode.stop();
-                }
-            );
+        function login() {
+            const pwd = document.getElementById('user-password').value;
+            if (!pwd) return alert("請輸入密碼");
+            
+            // 使用密碼作為資料庫的目錄名 (建議簡單混淆或加密)
+            userPath = 'users/' + btoa(pwd); 
+            document.getElementById('login-section').classList.add('hidden');
+            document.getElementById('main-content').classList.remove('hidden');
+            
+            // 開始監聽資料庫變動，只要資料庫一改，所有手機同步更新
+            loadData();
         }
 
-        function handleScan(barcode) {
-            currentBarcode = barcode;
-            const item = inventory[barcode];
-            document.getElementById('scan-result').classList.remove('hidden');
-            document.getElementById('res-barcode').innerText = barcode;
-            
-            if (item) {
-                document.getElementById('res-name').innerText = item.name;
-                document.getElementById('res-qty').innerText = item.qty;
-            } else {
-                document.getElementById('res-name').innerText = "查無此品項，請手動新增";
-                document.getElementById('res-qty').innerText = "0";
-            }
+        function loadData() {
+            db.ref(userPath).on('value', (snapshot) => {
+                const inventory = snapshot.val() || {};
+                renderInventory(inventory);
+                
+                // 如果正在掃描視窗，同步更新數量顯示
+                if (currentBarcode && inventory[currentBarcode]) {
+                    document.getElementById('res-qty').innerText = inventory[currentBarcode].qty;
+                }
+            });
         }
 
         function updateQty(change) {
-            if (!inventory[currentBarcode]) return alert("請先新增該品項資料");
-            inventory[currentBarcode].qty = Math.max(0, inventory[currentBarcode].qty + change);
-            saveAndRefresh();
-            handleScan(currentBarcode); // 更新顯示
+            const ref = db.ref(`${userPath}/${currentBarcode}/qty`);
+            ref.transaction((currentQty) => {
+                return Math.max(0, (currentQty || 0) + change);
+            });
         }
 
         function addItem() {
             const barcode = document.getElementById('new-barcode').value;
             const name = document.getElementById('new-name').value;
-            const qty = parseInt(document.getElementById('new-qty').value);
+            const qty = parseInt(document.getElementById('new-qty').value) || 0;
 
-            if (!barcode || !name) return alert("請輸入完整資料");
-            
-            inventory[barcode] = { name, qty: qty || 0 };
-            saveAndRefresh();
-            alert("品項已更新");
+            if (!barcode || !name) return alert("請輸入資料");
+
+            db.ref(`${userPath}/${barcode}`).set({ name, qty });
+            alert("雲端同步成功");
         }
 
-        function deleteItem(barcode) {
-            if (confirm("確定要刪除此品項嗎？")) {
-                delete inventory[barcode];
-                saveAndRefresh();
-            }
-        }
-
-        function saveAndRefresh() {
-            localStorage.setItem('inventory', JSON.stringify(inventory));
-            renderInventory();
-        }
-
-        function renderInventory() {
+        function renderInventory(inventory) {
             const listDiv = document.getElementById('inventory-list');
             listDiv.innerHTML = "";
 
-            // 排序：數量為 0 的排在最上面
             const sortedKeys = Object.keys(inventory).sort((a, b) => {
                 if (inventory[a].qty === 0 && inventory[b].qty > 0) return -1;
-                if (inventory[a].qty > 0 && inventory[b].qty === 0) return 1;
                 return 0;
             });
 
@@ -141,15 +135,24 @@
                 const itemEl = document.createElement('div');
                 itemEl.className = `inventory-item ${item.qty === 0 ? 'out-of-stock' : ''}`;
                 itemEl.innerHTML = `
-                    <div>
-                        <strong>${item.name}</strong><br>
-                        <small>SN: ${barcode} | 數量: ${item.qty}</small>
-                    </div>
-                    <div class="controls">
-                        <button class="btn btn-sub" onclick="deleteItem('${barcode}')">刪除</button>
-                    </div>
+                    <div><strong>${item.name}</strong><br><small>SN: ${barcode} | 數量: ${item.qty}</small></div>
+                    <button class="btn btn-sub" style="width:auto" onclick="deleteItem('${barcode}')">刪除</button>
                 `;
                 listDiv.appendChild(itemEl);
+            });
+        }
+
+        function deleteItem(barcode) {
+            if (confirm("確定刪除？")) db.ref(`${userPath}/${barcode}`).remove();
+        }
+
+        function startScanner() {
+            const html5QrCode = new Html5Qrcode("reader");
+            html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, (decodedText) => {
+                currentBarcode = decodedText;
+                document.getElementById('res-barcode').innerText = decodedText;
+                document.getElementById('scan-result').classList.remove('hidden');
+                html5QrCode.stop();
             });
         }
     </script>
